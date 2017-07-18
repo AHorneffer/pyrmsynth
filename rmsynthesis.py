@@ -45,7 +45,7 @@ from pywcs import WCS
 
 import rm_tools as R
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 
 
 class Params:
@@ -660,19 +660,22 @@ def rmsynthesis(params, options, manual=False):
              (decsz[1] - decsz[0])
         progress(20, pcent)
 
+    dicube.flush()
     if params.do_clean:  
         print '\n'  
         print "The fitted FWHM of the clean beam is " +str(round(rmc.sdev,2)) + " rad/m^2"
         print '\n'
+        rescube.flush()
+        cleancube.flush()
+        cccube.flush()
 
     print 'RM synthesis done!  Writing out FITS files...'
     write_output_files(dicube, params, thead, 'di')
     if params.do_clean:
-        write_output_files(rescube, params, thead, 'residual')
         write_output_files(cleancube, params, thead, 'clean')
+        write_output_files(rescube, params, thead, 'residual')
         write_output_files(cccube, params, thead, 'cc')
-        print 'Writing out CC list...'
-        write_output_files(cccube, params, thead, 'cc')
+        #print 'Writing out CC list...'
         # TODO: need to make this usable!
         #   it doesn't work right now because there are just way too many CCs
 
@@ -817,26 +820,28 @@ def write_output_files(cube, params, inhead, typename):
     """
     """
 
-    hdu_q = pyfits.PrimaryHDU(cube.real)
-    generate_header(hdu_q, inhead, params)
+    hdu_q = pyfits.PrimaryHDU(cube.real.copy())
+    #generate_header(hdu_q, inhead, params)
     try:
         generate_header(hdu_q, inhead, params)
     except:
         print "Warning: There was a problem generating the header, no " + \
             "header information stored!"
         print "Unexpected error:", sys.exc_info()[0]
-    hdu_q_list = pyfits.HDUList([hdu_q])
-    hdu_q_list.writeto(params.outputfn + '_' + typename +  '_q.fits', clobber=True)
+    #hdu_q_list = pyfits.HDUList([hdu_q])
+    hdu_q.writeto(params.outputfn + '_' + typename +  '_q.fits', clobber=True)
+    del hdu_q
 
-    hdu_main = pyfits.PrimaryHDU(cube.imag)
+    hdu_u = pyfits.PrimaryHDU(cube.imag.copy())
     try:
-        generate_header(hdu_main, inhead, params)
+        generate_header(hdu_u, inhead, params)
     except:
         print "Warning: There was a problem generating the header, no " + \
             "header information stored!"
         print "Unexpected error:", sys.exc_info()[0]
-    hdu_list = pyfits.HDUList([hdu_main])
-    hdu_list.writeto(params.outputfn + '_' + typename + '_u.fits', clobber=True)
+    #hdu_u_list = pyfits.HDUList([hdu_u])
+    hdu_u.writeto(params.outputfn + '_' + typename + '_u.fits', clobber=True)
+    del hdu_u
 
     hdu_p = pyfits.PrimaryHDU(abs(cube))
     try:
@@ -845,8 +850,9 @@ def write_output_files(cube, params, inhead, typename):
         print "Warning: There was a problem generating the header, no " + \
             "header information stored!"
         print "Unexpected error:", sys.exc_info()[0]
-    hdu_p_list = pyfits.HDUList([hdu_p])
-    hdu_p_list.writeto(params.outputfn + '_' + typename + '_p.fits', clobber=True)
+    #hdu_p_list = pyfits.HDUList([hdu_p])
+    hdu_p.writeto(params.outputfn + '_' + typename + '_p.fits', clobber=True)
+    del hdu_p
 
 
 def generate_v_header(hdu, inhead, params):
