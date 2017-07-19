@@ -16,6 +16,7 @@ the Free Software Foundation, either version 3 of the License, or
 
 import time, calendar, os
 from astropy.io import fits
+import pyfits
 import numpy as np
 import rm_tools
 from scipy.optimize import curve_fit
@@ -137,18 +138,18 @@ def sort_check_input_files(infiles, debug=False):
         else:
             findex = filesdict[datestamp]['frequencies'].index(freq)
             if inheader['CRVAL4'] == 2.:
-                filesdict[datestamp]['q-files'][findex] = [filename]
+                filesdict[datestamp]['q-files'][findex] = filename
             elif inheader['CRVAL4'] == 3.:
-                filesdict[datestamp]['u-files'][findex] = [filename]
+                filesdict[datestamp]['u-files'][findex] = filename
             else:
                 raise ValueError("Input file %s is not a Q- or U-map."%(filename))
         if (num % 100) == 0:
-            progress(80,100.*num/len(infiles))
-    progress(80,100.)
+            progress(70,100.*num/len(infiles))
+    progress(70,100.)
     # clean up the cube (remove entries with only Q or U maps)
     for datestamp in filesdict.keys():
         findex = 0
-        while fidx < len(filesdict[datestamp]['frequencies']):
+        while findex < len(filesdict[datestamp]['frequencies']):
             if ( (not filesdict[datestamp]['q-files'][findex]) or
                  (not filesdict[datestamp]['u-files'][findex]) ):
                 if debug:
@@ -187,17 +188,20 @@ def get_datacube_from_files(q_files, u_files, RAlen, DEClen, temfilename):
     """
     nchan = len(q_files) 
     assert len(u_files) == nchan
-        
-    incube = create_memmap_file_and_array(temfilename
-                                          (nchan, DEClen, RAlen)
+
+    incube = create_memmap_file_and_array(temfilename,
+                                          (nchan, DEClen, RAlen),
                                           np.dtype('complex128'))
     for idx in xrange(nchan):
         if q_files[idx] != None and u_files[idx] != None :
-            tdata_q = fits.getdata(q_files[idx])
-            tdata_u = fits.getdata(u_files[idx])
-            incube.real[idx] = tdata_q[0, 0, : , : ]
-            incube.imag[idx] = tdata_u[0, 0, : , : ]
-  
+            try:
+                tdata_q = pyfits.getdata(q_files[idx])
+                tdata_u = pyfits.getdata(u_files[idx])
+                incube.real[idx] = tdata_q[0, 0, : , : ]
+                incube.imag[idx] = tdata_u[0, 0, : , : ]
+            except IOError:
+                print "IO-Exception! idx: %d, Q-file: %s, U-file: %s"%(idx,q_files[idx],u_files[idx])
+                raise
     return incube
 
 def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequencies,
@@ -253,22 +257,26 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
 
     # make RM-synthesis object    
     weights = np.ones(len(ref_indices))
-    rms = rm_tools.RMSynth(reference_frequencies[ref_indices], dnu, phi_values, weights)
+    frequency_array = np.array(reference_frequencies)
+    rms = rm_tools.RMSynth(frequency_array[ref_indices], dnu, phi_values, weights)
     
     if storage_file:
-        corr_cube = np.array((len(phi_values),reference_cube.shape[1],reference_cube.shape[2]), dtype="float32")
+        corr_cube = np.zeros((len(phi_values),reference_cube.shape[1],reference_cube.shape[2]), dtype="float32")
 
     sum_corr = np.zeros(len(phi_values),dtype="float32")
+    progress(40,0.)
     for DEC_idx in xrange(reference_cube.shape[1]):
         for RA_idx in xrange(reference_cube.shape[2]):
-        los_data = reference_cube[ref_indices,DEC_idx,RA_idx] * data_cube[data_indices,DEC_idx,RA_idx].conj()
-        los_corr = np.abs(rms.compute_dirty_image(los_data))
-        if storage_file:
-            corr_cube[:,DEC_idx,RA_idx] = los_corr
-        sum_corr += los_corr
+            los_data = reference_cube[ref_indices,DEC_idx,RA_idx] * data_cube[data_indices,DEC_idx,RA_idx].conj()
+            los_corr = np.abs(rms.compute_dirty_image(los_data))
+            if storage_file:
+                corr_cube[:,DEC_idx,RA_idx] = los_corr
+            sum_corr += los_corr
+        progress(40,100.*DEC_idx/reference_cube.shape[1])
     if storage_file:
         np.save(storage_file, corr_cube)
-
+    print ""
+    
     return sum_corr
 
 
@@ -278,11 +286,14 @@ def gauss_function(x, a, x0, sigma):
     """
     return a*np.exp(-(x-x0)**2/(2*sigma**2))
           
-def do_RMselfcal(infiles):
+def do_RMselfcal(infiles,debug=False,debug_plots=False):
+
+    debug=True
+    
     # setup
     reffilename = 'rmselfcal_refcube.dat'
     datafilename = 'rmselfcal_tmpcube.dat'
-    phi_values = phi_values = np.arange(-6.,6.,0.1)
+    phi_values = np.arange(-6.,6.,0.1)
     
     # sort the input files
     (RAlen, DEClen, dnu, filesdict) = sort_check_input_files(infiles, debug=True)
@@ -298,31 +309,42 @@ def do_RMselfcal(infiles):
 
     # correlate time-steps with reference cube
     print "Performing the correlarions."
-    dFR_values = np.array(len(timestamps))
-    sigma_values = np.array(len(timestamps))
-    progress(80,0.)
+    dFR_values = np.zeros(len(timestamps))
+    sigma_values = np.zeros(len(timestamps))    
     for (dateidx, datestamp) in enumerate(timestamps):
+        print "Starting timeindex %d of %d"%(dateidx+1,len(timestamps))
         if datestamp == reftime:
             dFR_values[dateidx] = 0.
             sigma_values[dateidx] = 0.
             continue
+        print "Loading the comparison data-cube."
         datacube = get_datacube_from_files(filesdict[datestamp]['q-files'],
                                            filesdict[datestamp]['u-files'],
                                            RAlen, DEClen, datafilename)
+        print "Running the correlations."
         FR_corr = correlate_cubes(refcube, filesdict[reftime]['frequencies'],
                                   datacube, filesdict[datestamp]['frequencies'],
-                                  dnu, phi_values)
+                                  dnu, phi_values,storage_file="corr-cube.npy")
         # fit a Gaussian to get the position of the maximum
         maxidx = np.argmax(FR_corr)
         startvals = [FR_corr[maxidx],phi_values[maxidx],1.]
-        fstart = np.max(0, maxidx-5)
-        fend = np.min(len(FR_corr), maxidx+5)
+        fstart = max(0, maxidx-5)
+        fend = min(len(FR_corr), maxidx+5)
         (popt, pcov) = curve_fit(gauss_function, phi_values[fstart:fend], FR_corr[fstart:fend],
                                  startvals)
+        if debug:
+            print "startvals",startvals,"popt",popt,"pcov",pcov
+        if debug_plots:
+            import matplotlib as mpl
+            mpl.use('Agg')
+            import matplotlib.pyplot as plt
+            plt.plot(phi_values, FR_corr)
+            plt.plot(phi_values[fstart:fend], gauss_function(phi_values[fstart:fend], popt[0], popt[1],  popt[2]))
+            figurename = "corr-plot-%+05.0f.png"%((datestamp-reftime)/60.)
+            plt.savefig(figurename,dpi=100)
+            plt.clf()
         dFR_values[dateidx] = popt[1]
         sigma_values[dateidx] = popt[2]
-        progress(80,100.*dateidx/len(timestamps))
-    progress(80,100.)
 
     # return list of time-stamps and FR differences
     return timestamps, dFR_values, sigma_values
@@ -337,13 +359,18 @@ if __name__ == '__main__':
     parser.add_argument('im_file_pattern', help='Glob-able filename-pattern of input images. '
                         '(Usually needs to be put in quotation marks: \" or \')')
     parser.add_argument("outfile", help='Name of (gnuplot-style) output file to be written.')
-                        
+    parser.add_argument("-p", "--plots", dest="Plots", action="store_true",
+                        help="Write out png plots with the correlation for each time-step.")
+    parser.add_argument("-d", "--debug", dest="Debug", action="store_true",
+                        help="Generate Debug output.")
+    
+
     
     args = parser.parse_args()
 
     imlist = glob.glob(args.im_file_pattern)
 
-    (timestamps, dFR_values, sigma_values) = do_RMselfcal(infiles)
+    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist,debug=args.Debug,debug_plots=args.Plots)
     fd = open(args.outfile,"w")
     fd.write("# timestamp dFR_value sigma_value\n")
     for (timestamp, dFR, sigma) in zip(timestamps, dFR_values, sigma_values):
