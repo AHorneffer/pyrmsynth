@@ -22,6 +22,7 @@ from scipy.optimize import curve_fit
 
 def progress(width, percent):
     """
+    Print a progress-bar
     """
     import sys, math
     marks = math.floor(width * (percent / 100.0))
@@ -61,6 +62,8 @@ def sort_check_input_files(infiles, maskfile=None, debug=False):
     maskfile : str (optional)
         Name (path) of a mask file that will be chcked for conformity 
         with the polarization files
+    debug : bool (optional)
+        Print out some more debug information
     """
     filesdict = {}
 
@@ -136,7 +139,8 @@ def sort_check_input_files(infiles, maskfile=None, debug=False):
             assert CDELT2 == inheader['CDELT2']
             assert CDELT3 == inheader['CDELT3']
         except AssertionError:
-            raise ValueError("Input file %s has different structure than %s"%(filename,infiles[0]))
+            print "Input file %s has different structure than %s"%(filename,infiles[0])
+            raise
         datestring = inheader['DATE-OBS']
         datestamp = calendar.timegm(time.strptime(datestring.split('.')[0]+' UTC',"%Y-%m-%dT%H:%M:%S %Z"))
         freq = inheader['CRVAL3']
@@ -225,7 +229,7 @@ def get_datacube_from_files(q_files, u_files, RAlen, DEClen, temfilename):
     return incube
 
 def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequencies,
-                    dnu, phi_values, mask=None, storage_file=None):
+                    dnu, phi_values, mask=None, numrows=None, storage_file=None, debug=False):
     """
     correlate the two data-cubes
 
@@ -251,8 +255,12 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
         Mask array with dimensions (DEClen, RAlen). DEClen, RAlen have to be the 
         same as in input cubes. Only lines-of-sight in which mask is _not_ set will
         be used for the correlation. (I.e. mask can be a stokes-I clean mask.)
+    numrows : int
+        Process only this many rows in DEC.
     storage_file : str
         Name (path) of a file in which to store the corrlation data
+    debug : bool
+        Print debug output
         
     """
     # check data consitency
@@ -283,7 +291,8 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
             ref_idx += 1
         else:
             data_idx += 1
-    print("correlate_cubes: Num-Frequencies: reference: %d, data: %d, matched: %d"%(len(reference_frequencies), len(data_frequencies), len(ref_indices)))
+    if debug:
+        print("correlate_cubes: Num-Frequencies: reference: %d, data: %d, matched: %d"%(len(reference_frequencies), len(data_frequencies), len(ref_indices)))
 
     # make RM-synthesis object    
     weights = np.ones(len(ref_indices))
@@ -294,9 +303,14 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
         corr_cube = np.zeros((len(phi_values),reference_cube.shape[1],reference_cube.shape[2]), dtype="float32")
 
     sum_corr = np.zeros(len(phi_values),dtype="float32")
+    if numrows and int(numrows)>0:
+        numrows=min(int(numrows),reference_cube.shape[1])
+        if debug:
+            print "Processing",numrows,"rows."
+    else:
+        numrows = reference_cube.shape[1]      
     progress(40,0.)
-    #for DEC_idx in xrange(reference_cube.shape[1]):
-    for DEC_idx in xrange(100):
+    for DEC_idx in xrange(numrows):
         for RA_idx in xrange(reference_cube.shape[2]):
             if not_use_mask or not mask[DEC_idx,RA_idx]:
                 los_data = reference_cube[ref_indices,DEC_idx,RA_idx] * \
@@ -305,7 +319,7 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
                 if storage_file:
                     corr_cube[:,DEC_idx,RA_idx] = los_corr
                 sum_corr += los_corr
-        progress(40,100.*DEC_idx/reference_cube.shape[1])
+        progress(40,100.*(DEC_idx+1.001)/reference_cube.shape[1])
     if storage_file:
         np.save(storage_file, corr_cube)
     print ""
@@ -319,10 +333,35 @@ def gauss_function(x, a, x0, sigma):
     """
     return a*np.exp(-(x-x0)**2/(2*sigma**2))
           
-def do_RMselfcal(infiles,maskfile=False,debug=False,debug_plots=False):
+def do_RMselfcal(infiles,maskfile=False,numrows=None,debug=False,debug_plots=False):
+    """
+    Perform RM-selfcal
 
-    debug=True
-    
+    Parameters:
+    -----------
+    infiles : list of str
+        Names (pathes) of the input Q- and U-maps.
+    maskfile : str (optional)
+        Name (path) of a maskfile. Only positions not in the mask 
+        will be used for the correlation. (I.e. a clean-mask for Stokes-I
+        cleaning will reduce the influence of instrumental polarization.)
+    numrows : int (optional)
+        Number of linese in DEC that should be processed. Intended to reduce 
+        processing while debugging the code.
+    debug : bool (optional)
+        Print out debug information.
+    debug_plots : bool
+        Create plots (png files) with the summed correlation for each time-step.
+
+    Results:
+    --------
+    timestamps : list of float
+        List with the time-stamps (in Unix time) of the time-steps
+    dFR_values : 1-d array of float with length of timestamps
+        Faraday rotation difference to reference time of the time-steps
+    sigma_values : 1-d array of float with length of timestamps
+        Width of the gaussian fit for the time-steps
+    """
     # setup
     reffilename = 'rmselfcal_refcube.dat'
     datafilename = 'rmselfcal_tmpcube.dat'
@@ -360,18 +399,21 @@ def do_RMselfcal(infiles,maskfile=False,debug=False,debug_plots=False):
     for (dateidx, datestamp) in enumerate(timestamps):
         print "Starting timeindex %d of %d"%(dateidx+1,len(timestamps))
         if datestamp == reftime:
+            if debug: print "This is the reference time, continuing."
             dFR_values[dateidx] = 0.
             sigma_values[dateidx] = 0.
             continue
-        print "Loading the comparison data-cube."
+        if debug: print "Loading the comparison data-cube."
         datacube = get_datacube_from_files(filesdict[datestamp]['q-files'],
                                            filesdict[datestamp]['u-files'],
                                            RAlen, DEClen, datafilename)
-        print "Running the correlations."
+        if debug: print "Running the correlations."
         FR_corr = correlate_cubes(refcube, filesdict[reftime]['frequencies'],
                                   datacube, filesdict[datestamp]['frequencies'],
-                                  dnu, phi_values,
-                                  mask=mask, storage_file="corr-cube.npy")
+                                  dnu, phi_values, 
+                                  mask=mask, numrows=numrows,
+                                  storage_file="corr-cube.npy",
+                                  debug=debug)
         # fit a Gaussian to get the position of the maximum
         maxidx = np.argmax(FR_corr)
         startvals = [FR_corr[maxidx],(phi_values[maxidx]+.01),1.]
@@ -410,6 +452,9 @@ if __name__ == '__main__':
                         help="Name (path) of a mask file. Only positions not in the mask "
                         "will be used for the correlation. (I.e. a clean-mask for Stokes-I "
                         "cleaning will reduce the influence of instrumental polarization.)")
+    parser.add_argument("-n", "--num-rows", dest="Rows",
+                        help="Process only this many rows in DEC when calucating the correlations. "
+                        "Mainly for debugging purposes.")
     parser.add_argument("-p", "--plots", dest="Plots", action="store_true",
                         help="Write out png plots with the correlation for each time-step.")
     parser.add_argument("-d", "--debug", dest="Debug", action="store_true",
@@ -421,7 +466,7 @@ if __name__ == '__main__':
 
     imlist = glob.glob(args.im_file_pattern)
 
-    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist, maskfile=args.Mask,
+    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist, maskfile=args.Mask, numrows=args.Rows, 
                                                           debug=args.Debug, debug_plots=args.Plots)
     fd = open(args.outfile,"w")
     fd.write("# timestamp dFR_value sigma_value\n")
