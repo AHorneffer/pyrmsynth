@@ -313,8 +313,8 @@ def correlate_cubes(reference_cube, reference_frequencies, data_cube, data_frequ
     for DEC_idx in xrange(numrows):
         for RA_idx in xrange(reference_cube.shape[2]):
             if not_use_mask or not mask[DEC_idx,RA_idx]:
-                los_data = reference_cube[ref_indices,DEC_idx,RA_idx] * \
-                           data_cube[data_indices,DEC_idx,RA_idx].conj()
+                los_data = data_cube[data_indices,DEC_idx,RA_idx] * \
+                           reference_cube[ref_indices,DEC_idx,RA_idx].conj()
                 los_corr = np.abs(rms.compute_dirty_image(los_data))
                 if storage_file:
                     corr_cube[:,DEC_idx,RA_idx] = los_corr
@@ -403,6 +403,7 @@ def do_RMselfcal(infiles,maskfile=False,invert_mask=False,numrows=None,
     print "Performing the correlarions."
     dFR_values = np.zeros(len(timestamps))
     sigma_values = np.zeros(len(timestamps))    
+    peak_values = np.zeros(len(timestamps))    
     for (dateidx, datestamp) in enumerate(timestamps):
         print "Starting timeindex %d of %d"%(dateidx+1,len(timestamps))
         if datestamp == reftime:
@@ -439,11 +440,12 @@ def do_RMselfcal(infiles,maskfile=False,invert_mask=False,numrows=None,
             figurename = "corr-plot-%+05.0f.png"%((datestamp-reftime)/60.)
             plt.savefig(figurename,dpi=100)
             plt.clf()
+        peak_values[dateidx] = popt[0]
         dFR_values[dateidx] = popt[1]
         sigma_values[dateidx] = popt[2]
 
     # return list of time-stamps and FR differences
-    return timestamps, dFR_values, sigma_values
+    return timestamps, dFR_values, sigma_values, peak_values
 
 
 if __name__ == '__main__':
@@ -476,12 +478,12 @@ if __name__ == '__main__':
 
     imlist = glob.glob(args.im_file_pattern)
 
-    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist, maskfile=args.Mask,
-                                                          numrows=args.Rows,
-                                                          invert_mask=args.invert_mask,
-                                                          debug=args.Debug, debug_plots=args.Plots)
+    (timestamps, dFR_values, sigma_values, peak_values) = do_RMselfcal(imlist, maskfile=args.Mask,
+                                                                       numrows=args.Rows,
+                                                                       invert_mask=args.invert_mask,
+                                                                       debug=args.Debug, debug_plots=args.Plots)
     fd = open(args.outfile,"w")
     fd.write("# timestamp dFR_value sigma_value\n")
-    for (timestamp, dFR, sigma) in zip(timestamps, dFR_values, sigma_values):
-        fd.write("%f %f %f\n"%(timestamp, dFR, sigma))
+    for (timestamp, dFR, sigma, peak) in zip(timestamps, dFR_values, sigma_values, peak_values):
+        fd.write("%f %f %f %f\n"%(timestamp, dFR, sigma, peak))
     fd.close()
