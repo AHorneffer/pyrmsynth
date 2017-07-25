@@ -333,7 +333,8 @@ def gauss_function(x, a, x0, sigma):
     """
     return a*np.exp(-(x-x0)**2/(2*sigma**2))
           
-def do_RMselfcal(infiles,maskfile=False,numrows=None,debug=False,debug_plots=False):
+def do_RMselfcal(infiles,maskfile=False,invert_mask=False,numrows=None,
+                 debug=False,debug_plots=False):
     """
     Perform RM-selfcal
 
@@ -345,12 +346,14 @@ def do_RMselfcal(infiles,maskfile=False,numrows=None,debug=False,debug_plots=Fal
         Name (path) of a maskfile. Only positions not in the mask 
         will be used for the correlation. (I.e. a clean-mask for Stokes-I
         cleaning will reduce the influence of instrumental polarization.)
+    invert_mask : bool (optional)
+        Invert the logic of the mask, i.e. use th position where the mask is set.
     numrows : int (optional)
         Number of linese in DEC that should be processed. Intended to reduce 
         processing while debugging the code.
     debug : bool (optional)
         Print out debug information.
-    debug_plots : bool
+    debug_plots : bool (optional)
         Create plots (png files) with the summed correlation for each time-step.
 
     Results:
@@ -366,6 +369,8 @@ def do_RMselfcal(infiles,maskfile=False,numrows=None,debug=False,debug_plots=Fal
     reffilename = 'rmselfcal_refcube.dat'
     datafilename = 'rmselfcal_tmpcube.dat'
     phi_values = np.arange(-6.,6.,0.1)
+    if invert_mask and debug:
+        print "Going to invert the mask logic!"
     
     # sort the input files
     (RAlen, DEClen, dnu, filesdict) = sort_check_input_files(infiles, maskfile=maskfile, debug=True)
@@ -382,13 +387,15 @@ def do_RMselfcal(infiles,maskfile=False,numrows=None,debug=False,debug_plots=Fal
     if maskfile:
         maskdata = fits.getdata(maskfile)
         if maskdata.ndim == 4:
-            mask = maskdata[0,0,:,:]
+            mask = maskdata[0,0,:,:].astype(np.bool)
         elif maskdata.ndim == 3:
-            mask = maskdata[0,:,:]
+            mask = maskdata[0,:,:].astype(np.bool)
         elif maskdata.ndim == 2:
-            mask = maskdata[:,:]
+            mask = maskdata[:,:].astype(np.bool)
         else:
             raise ValueError("Mask %s has unsupported number of dimensions %d"%(maskfile, maskdata.ndim))
+        if invert_mask:
+            mask = np.logical_not(mask)
     else:
         mask = None
             
@@ -452,6 +459,9 @@ if __name__ == '__main__':
                         help="Name (path) of a mask file. Only positions not in the mask "
                         "will be used for the correlation. (I.e. a clean-mask for Stokes-I "
                         "cleaning will reduce the influence of instrumental polarization.)")
+    parser.add_argument("--invert_mask", action="store_true",
+                        help="Invert the logic of the mask, i.e. use the position in which "
+                        "the mask is set.")
     parser.add_argument("-n", "--num-rows", dest="Rows",
                         help="Process only this many rows in DEC when calucating the correlations. "
                         "Mainly for debugging purposes.")
@@ -466,7 +476,9 @@ if __name__ == '__main__':
 
     imlist = glob.glob(args.im_file_pattern)
 
-    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist, maskfile=args.Mask, numrows=args.Rows, 
+    (timestamps, dFR_values, sigma_values) = do_RMselfcal(imlist, maskfile=args.Mask,
+                                                          numrows=args.Rows,
+                                                          invert_mask=args.invert_mask,
                                                           debug=args.Debug, debug_plots=args.Plots)
     fd = open(args.outfile,"w")
     fd.write("# timestamp dFR_value sigma_value\n")
