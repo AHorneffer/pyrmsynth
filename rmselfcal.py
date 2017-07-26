@@ -16,6 +16,7 @@ the Free Software Foundation, either version 3 of the License, or
 
 import time, calendar, os
 from astropy.io import fits
+import astropy.time as astrotime
 import numpy as np
 import rm_tools
 from scipy.optimize import curve_fit
@@ -70,8 +71,11 @@ def sort_check_input_files(infiles, maskfile=None, debug=False):
     print "Sorting all files by time and frequency"
     #read in first fits-file
     inheader = fits.getheader(infiles[0])    
-    datestring = inheader['DATE-OBS']
-    datestamp = calendar.timegm(time.strptime(datestring.split('.')[0]+' UTC',"%Y-%m-%dT%H:%M:%S %Z"))
+    #datestring = inheader['DATE-OBS']
+    #datestamp = calendar.timegm(time.strptime(datestring.split('.')[0]+' UTC',"%Y-%m-%dT%H:%M:%S %Z"))
+    # LOFAR (or CASA MS?) style datestamp is MJD in seconds.
+    t = astrotime.Time(inheader['DATE-OBS'],format='isot')
+    datestamp = t.mjd*24.*3600.
     try:
         assert inheader['NAXIS']   == 4
         assert inheader['NAXIS3']  == 1
@@ -141,8 +145,10 @@ def sort_check_input_files(infiles, maskfile=None, debug=False):
         except AssertionError:
             print "Input file %s has different structure than %s"%(filename,infiles[0])
             raise
-        datestring = inheader['DATE-OBS']
-        datestamp = calendar.timegm(time.strptime(datestring.split('.')[0]+' UTC',"%Y-%m-%dT%H:%M:%S %Z"))
+        #datestring = inheader['DATE-OBS']
+        #datestamp = calendar.timegm(time.strptime(datestring.split('.')[0]+' UTC',"%Y-%m-%dT%H:%M:%S %Z"))
+        t = astrotime.Time(inheader['DATE-OBS'],format='isot')
+        datestamp = t.mjd*24.*3600.
         freq = inheader['CRVAL3']
         if datestamp not in filesdict:
             filesdict[datestamp] = {}
